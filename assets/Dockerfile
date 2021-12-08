@@ -42,9 +42,7 @@ ENV PATH="/opt/mambaforge/envs/${ENV_NAME}/bin:/opt/mambdaforge/bin:${PATH}"
 ENV CONDA_PREFIX="/opt/mambaforge/envs/${ENV_NAME}"
 
 # Install 'util' Python package
-RUN mkdir agha-data-validation-pipeline-repo
-RUN git clone https://github.com/umccr/agha-data-validation-pipeline.git agha-data-validation-pipeline-repo
-COPY agha-data-validation-pipeline-repo/lambdas/layers/util/ /opt/util/
+COPY lambdas/layers/util/ /opt/util/
 RUN \
     pip install /opt/util/ && \
     rm -r /opt/util/

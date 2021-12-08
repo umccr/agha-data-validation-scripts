@@ -4,8 +4,6 @@ yarn.*
 
 # CDK asset staging directory
 .cdk.staging
-cdk.out
-/cdk.out/
 lambdas/layers/**/*.zip
 
 # Distribution / packaging

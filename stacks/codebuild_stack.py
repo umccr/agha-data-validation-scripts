@@ -60,10 +60,23 @@ class CodebuildStack(core.Stack):
             build_spec = codebuild.BuildSpec.from_object({
                 "version": "0.2",
                 "phases": {
+                    "install":{
+                        "commands":[
+                            "apt-get update && apt-get install --yes subversion"
+                        ]
+                    },
+                    "pre_build":{
+                        "commands":[
+                            "svn checkout https://github.com/umccr/agha-data-validation-pipeline/trunk/lambdas"
+                        ]
+                    },
                     "build": {
                         "commands": ["docker build -t ${NAME} -f assets/Dockerfile .",
                                      "docker tag ${NAME} ${AWS_PROVIDER_URI}:${VERSION}",
                                      "docker push ${AWS_PROVIDER_URI}:${VERSION}"]
+                    },
+                    "post_build": {
+                        "commands": ["rm -rf lambdas"]
                     }
                 }
             })
