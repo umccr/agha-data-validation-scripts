@@ -1,6 +1,6 @@
 
 # Build on top of Ubuntu LTS (focal)
-FROM ubuntu:20.04
+FROM public.ecr.aws/ubuntu/ubuntu:20.04
 
 # Set Conda environment name
 ARG ENV_NAME=agha
