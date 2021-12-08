@@ -351,6 +351,20 @@
                             "type": "FILE_PATH",
                             "pattern": "assets\\/validate_file\\.py"
                           }
+                        ],
+                        [
+                          {
+                            "type": "EVENT",
+                            "pattern": "PUSH"
+                          },
+                          {
+                            "type": "HEAD_REF",
+                            "pattern": "refs/heads/main"
+                          },
+                          {
+                            "type": "FILE_PATH",
+                            "pattern": "assets\\/Dockerfile"
+                          }
                         ]
                       ]
                     }

@@ -32,7 +32,9 @@ class CodebuildStack(core.Stack):
                 webhook=True,
                 webhook_filters=[
                     codebuild.FilterGroup.in_event_of(codebuild.EventAction.PUSH).and_branch_is("main")
-                        .and_file_path_is("assets\/validate_file\.py")
+                        .and_file_path_is("assets\/validate_file\.py"),
+                    codebuild.FilterGroup.in_event_of(codebuild.EventAction.PUSH).and_branch_is("main")
+                        .and_file_path_is("assets\/Dockerfile")
                 ]
             ),
             project_name="agha_validation_image_build",

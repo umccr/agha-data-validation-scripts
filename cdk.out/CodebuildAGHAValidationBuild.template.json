@@ -284,6 +284,20 @@
                 "Pattern": "assets\\/validate_file\\.py",
                 "Type": "FILE_PATH"
               }
+            ],
+            [
+              {
+                "Pattern": "PUSH",
+                "Type": "EVENT"
+              },
+              {
+                "Pattern": "refs/heads/main",
+                "Type": "HEAD_REF"
+              },
+              {
+                "Pattern": "assets\\/Dockerfile",
+                "Type": "FILE_PATH"
+              }
             ]
           ],
           "Webhook": true
