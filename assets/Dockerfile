@@ -10,6 +10,7 @@ RUN \
   apt-get update && \
   apt-get install --yes --no-install-recommends \
     ca-certificates  \
+    subversion \
     curl && \
   # Clean up
   apt-get clean && \
@@ -42,7 +43,7 @@ ENV PATH="/opt/mambaforge/envs/${ENV_NAME}/bin:/opt/mambdaforge/bin:${PATH}"
 ENV CONDA_PREFIX="/opt/mambaforge/envs/${ENV_NAME}"
 
 # Install 'util' Python package
-COPY lambdas/layers/util/ /opt/util/
+RUN svn checkout https://github.com/umccr/agha-data-validation-pipeline/trunk/lambdas/layers/util /opt/util/
 RUN \
     pip install /opt/util/ && \
     rm -r /opt/util/
