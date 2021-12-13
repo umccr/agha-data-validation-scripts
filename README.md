@@ -1,7 +1,7 @@
 # agha-data-validation-scripts
 
 
-This repository is a supplementary of [ummcr/agha-data-validation-pipeline](https://github.com/umccr/agha-data-validation-pipeline).
+This repository is a supplementary of [ummcr/agha-data-validation-pipeline](https://github.com/umccr/agha-data-validation-pipeline) (Currently using dev branch).
 Wrapping script into images and pushed to ECR.
 
 The repository has a codebuild to build images from python scripts located in `/assets` and will detect changes to the 

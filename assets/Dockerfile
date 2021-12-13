@@ -43,7 +43,8 @@ ENV PATH="/opt/mambaforge/envs/${ENV_NAME}/bin:/opt/mambdaforge/bin:${PATH}"
 ENV CONDA_PREFIX="/opt/mambaforge/envs/${ENV_NAME}"
 
 # Install 'util' Python package
-RUN svn checkout https://github.com/umccr/agha-data-validation-pipeline/trunk/lambdas/layers/util /opt/util/
+# NOTE: This use dev branch instead of main branch
+RUN svn checkout https://github.com/umccr/agha-data-validation-pipeline/branches/dev/lambdas/layers/util /opt/util/
 RUN \
     pip install /opt/util/ && \
     rm -r /opt/util/
