@@ -27,3 +27,19 @@ Build
 ```bash
 docker build -t "${NAME}" -f assets/Dockerfile .
 ```
+## Developing manually
+___
+
+The script on the assets folder most likely use utils from [ummcr/agha-data-validation-pipeline](https://github.com/umccr/agha-data-validation-pipeline/tree/dev/lambdas/layers/util).
+The Dockerfile will download and copy its as part of the container. If you want to copy `/util/` file in the local directory, use following command.
+
+Install subversion
+```bash
+sudo apt-get update
+sudo apt-get install subversion
+```
+
+Copy the file
+```bash
+svn checkout https://github.com/umccr/agha-data-validation-pipeline/branches/dev/lambdas/layers/util
+```
