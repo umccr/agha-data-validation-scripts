@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 import argparse
 import decimal
-import enum
 import json
 import logging
 import os
 import pathlib
-import sys
 import gzip
 import shutil
+import sys
 
 import util
 import util.batch as batch
 import util.s3 as s3
+import util.agha as agha
 
 # Logging
 LOGGER = logging.getLogger(__name__)
@@ -34,45 +34,17 @@ BATCH_JOBID = util.get_environment_variable('AWS_BATCH_JOB_ID')
 CLIENT_S3 = util.get_client('s3')
 
 
-class BatchJobResult:
-
-    def __init__(self, staging_s3_key='', task_type='', value='', status='', source_file=[]):
-        self.staging_s3_key = staging_s3_key
-        self.task_type = task_type
-        self.value = value
-        self.status = status
-        self.source_file = source_file
-
-
-class FileTypes(enum.Enum):
-    BAM = 'BAM'
-    FASTQ = 'FASTQ'
-    VCF = 'VCF'
-
-    @classmethod
-    def contains(cls, item):
-        try:
-            cls(item)
-        except ValueError:
-            return False
-        return True
-
-
-INDEXABLE_FILES = [
-    FileTypes.BAM.value,
-    FileTypes.VCF.value,
-]
-
-COMPRESSABLE_FILE = [
-    FileTypes.VCF.value,
-    FileTypes.FASTQ.value
-]
+# Aim:
+# .vcf.gz
+# .vcf.gz.tbi
 
 
 def get_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--partition_key', required=True, type=str,
-                        help='DynamoDB partition key used to identify file (s3_key expected)')
+    parser.add_argument('--s3_key', required=True, type=str,
+                        help='Staging s3_key is expected')
+    parser.add_argument('--checksum', required=True, type=str,
+                        help='Checksum for the s3_key staging file')
     parser.add_argument('--tasks', required=True, choices=[m.value for m in batch.Tasks], nargs='+',
                         help='Tasks to perform')
     return parser.parse_args()
@@ -86,90 +58,113 @@ def main():
     LOGGER.info(f'starting job: {BATCH_JOBID}')
 
     # Parsing values
-    staging_s3_key = args.partition_key
-    filename = s3.get_s3_filename_from_s3_key(staging_s3_key)
-    LOGGER.info(f'Grabbing filename: {filename}')
+    provided_checksum = args.checksum
+    staging_s3_key = args.s3_key
+    tasks = {batch.Tasks(task_str) for task_str in args.tasks}
+
+    LOGGER.info(f'Processing: \n Checksum: {(provided_checksum)}, '
+                f'staging_s3_key:{(staging_s3_key)}, tasks:{(tasks)}')
 
     # Grab list result
     batch_job_result_list = []
 
     # Stage file from S3 and then validate
+    filename = s3.get_s3_filename_from_s3_key(staging_s3_key)
+    LOGGER.info(f'Grabbing filename: {filename}')
     fp_local = stage_file(
         staging_bucket=STAGING_BUCKET,
         s3_key=staging_s3_key,
         filename=filename
     )
 
-    tasks = {batch.Tasks(task_str) for task_str in args.tasks}
-
     # Checksum tasks
-    if batch.Tasks.CHECKSUM in tasks:
-        checksum_result = run_checksum(fp_local, staging_s3_key)
+    if batch.Tasks.CHECKSUM_VALIDATION in tasks:
+        checksum_result = run_checksum(fp_local, provided_checksum, staging_s3_key)
         batch_job_result_list.append(checksum_result.__dict__)
         LOGGER.info('Appending results:')
-        LOGGER.info(json.dumps(batch_job_result_list))
-    # # File Validation task
-    if batch.Tasks.FILE_VALIDATE in tasks:
+        LOGGER.info(json.dumps(checksum_result.__dict__))
+
+        # Not proceeding to anything else. Original data might have something wrong
+        if checksum_result.status == batch.StatusBatchResult.FAIL.value:
+            LOGGER.info('Checksum test FAIL. Aborting...')
+            write_results_s3(batch_job_result_list, staging_s3_key)
+            return
+
+    # File Validation task
+    if batch.Tasks.FILE_VALIDATION in tasks:
         file_validation_result = run_filetype_validation(fp_local, staging_s3_key)
         batch_job_result_list.append(file_validation_result.__dict__)
         LOGGER.info('Appending results:')
-        LOGGER.info(json.dumps(batch_job_result_list))
+        LOGGER.info(json.dumps(file_validation_result.__dict__))
+
+        # Not proceeding to anything else. Original data might have something wrong
+        if file_validation_result.status == batch.StatusBatchResult.FAIL.value:
+            LOGGER.info('File validation test FAIL. Aborting...')
+            write_results_s3(batch_job_result_list, staging_s3_key)
+            return
 
         filetype = file_validation_result.value
 
-        # Simplify index requirement check
-        if batch.Tasks.INDEX in tasks and filetype in INDEXABLE_FILES:
-            indexing_result = run_indexing(fp_local, staging_s3_key, filetype)
-            batch_job_result_list.append(indexing_result.__dict__)
-            LOGGER.info('Appending results:')
-            LOGGER.info(json.dumps(batch_job_result_list))
-
         # Compression Task
-        if batch.Tasks.COMPRESS in tasks and filetype in COMPRESSABLE_FILE:
+        if batch.Tasks.COMPRESS in tasks and agha.FileType.is_compressable(filetype):
             LOGGER.info(f'Compressing job has been selected')
+
             if not staging_s3_key.endswith('.gz'):
                 LOGGER.info(f'Data need to be compressed. Running it now.')
                 compression_result = run_compression(fp_local=fp_local, staging_s3_key=staging_s3_key)
             else:
                 LOGGER.info(f'Data is already compressed. Compressed result refer to staging original data')
                 source_file = {
-                    'bucket_name': RESULTS_BUCKET,
+                    'bucket_name': STAGING_BUCKET,
                     's3_key': staging_s3_key,
+                    'checksum': provided_checksum
                 }
 
-                compression_result = BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.COMPRESS.value,
-                                                    value='FILE', status='SUCCEED',
-                                                    source_file=[source_file])
+                compression_result = batch.BatchJobResult(staging_s3_key=staging_s3_key,
+                                                          task_type=batch.Tasks.COMPRESS.value,
+                                                          value='FILE', status='SUCCEED',
+                                                          source_file=[source_file])
 
             batch_job_result_list.append(compression_result.__dict__)
             LOGGER.info('Appending results:')
-            LOGGER.info(json.dumps(batch_job_result_list))
+            LOGGER.info(json.dumps(compression_result.__dict__))
+
+
+        # Simplify index requirement check
+        if batch.Tasks.INDEX in tasks and agha.FileType.is_indexable(filetype):
+            LOGGER.info(f'Indexing job has been selected')
+
+            indexing_result = run_indexing(fp_local, staging_s3_key, filetype)
+            batch_job_result_list.append(indexing_result.__dict__)
+
+            LOGGER.info('Appending results:')
+            LOGGER.info(json.dumps(indexing_result.__dict__))
 
     # Write completed result to log and S3
     write_results_s3(batch_job_result_list, staging_s3_key)
 
 
-def run_compression(fp_local, staging_s3_key) -> BatchJobResult:
+def run_compression(fp_local, staging_s3_key) -> batch.BatchJobResult:
     LOGGER.info('Running compression job')
 
     # Create result class
-    batch_job_result = BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.COMPRESS.value)
+    batch_job_result = batch.BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.COMPRESS.value)
 
-    compress_fp = str(fp_local) + '.gz'
-    LOGGER.info(f'Compressing {fp_local} to {compress_fp}')
-    compressing_file(fp_local, compress_fp)
+    compress_fp = compressing_file(fp_local)
+    LOGGER.info(f'Compress file from {fp_local} to {compress_fp}')
 
     # Uploading data
     compress_s3_key = upload_file_to_s3(compress_fp)
 
-    batch_job_result.status = 'SUCCEED'
+    batch_job_result.status = batch.StatusBatchResult.SUCCEED.value
     batch_job_result.value = 'FILE'
 
     source_file = {
         'bucket_name': RESULTS_BUCKET,
         's3_key': compress_s3_key,
+        'checksum': calculate_checksum_from_fp(compress_fp)
     }
-    batch_job_result.source_file.append(source_file)
+    batch_job_result.source_file = [source_file]
 
     # Log results
     result_str = f'result:    {batch_job_result.status}'
@@ -182,10 +177,13 @@ def run_compression(fp_local, staging_s3_key) -> BatchJobResult:
     return batch_job_result
 
 
-def compressing_file(fp_in, fp_out):
+def compressing_file(fp_in):
+    fp_out = str(fp_in) + '.gz'
     with open(fp_in, 'rb') as f_in:
         with gzip.open(fp_out, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
+
+    return fp_out
 
 
 def replace_record_decimal_object(record):
@@ -203,66 +201,71 @@ def stage_file(staging_bucket, s3_key, filename):
     return output_fp
 
 
-def run_checksum(fp, staging_s3_key) -> BatchJobResult:
+def run_checksum(fp, provided_checksum, staging_s3_key) -> batch.BatchJobResult:
     """
     Expected result: A record class of BatchJobResult
     """
 
     LOGGER.info('running checksum')
 
-    # Execute checksum
-    command = f"md5sum {fp} | cut -f1 -d' '"
-    LOGGER.info(f'Command to execute: {command}')
-    result = util.execute_command(command)
-
-    calculated_checksum = result.stdout.rstrip()
-
     # Create result class
-    batch_job_result = BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.CHECKSUM.value,
-                                      value=calculated_checksum)
+    batch_job_result = batch.BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.CHECKSUM_VALIDATION.value)
 
-    if result.returncode != 0:
-        stdstrm_msg = f'\r\tstdout: {result.stdout}\r\tstderr: {result.stderr}'
-        LOGGER.critical(f'failed to run checksum ({command}): {stdstrm_msg}')
+    try:
+        calculated_checksum: str = calculate_checksum_from_fp(fp)
 
-        batch_job_result.status = 'FAIL'
+        batch_job_result.value = calculated_checksum
 
+    except ValueError as e:
+        stdstrm_msg = f'\r\tstderr: {e}'
+        LOGGER.critical(f'failed to run checksum command: {stdstrm_msg}')
+
+        batch_job_result.status = batch.StatusBatchResult.FAIL.value
         return batch_job_result
-    else:
-        batch_job_result.status = 'SUCCEED'
 
-    # Log results
+    # Check for mismatch checksum
+    if provided_checksum != calculated_checksum:
+
+        LOGGER.critical(f'Provided checksum and calculated checksum does not match')
+        LOGGER.critical(f'Provided checksum: {provided_checksum} and calculated checksum: {calculated_checksum}')
+
+        batch_job_result.status = batch.StatusBatchResult.FAIL.value
+        return batch_job_result
+
+    # Checksum should be ok and match
     calculated_str = f'calculated: {calculated_checksum}'
     LOGGER.info(f'Calculated checksum result:\r\t{calculated_str}')
 
-    # Return value
+    batch_job_result.status = batch.StatusBatchResult.SUCCEED.value
     return batch_job_result
 
 
-def run_filetype_validation(fp, staging_s3_key) -> BatchJobResult:
+def run_filetype_validation(fp, staging_s3_key) -> batch.BatchJobResult:
     LOGGER.info('running file type validation')
 
     # Create result class
-    batch_job_result = BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.FILE_VALIDATE.value)
+    batch_job_result = batch.BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.FILE_VALIDATION.value)
 
     # Get file type
     if any(fp.name.endswith(fext) for fext in util.FEXT_BAM):
-        filetype = FileTypes.BAM
+        filetype = agha.FileType.BAM.get_name()
         command = f'samtools quickcheck -q {fp}'
+
     elif any(fp.name.endswith(fext) for fext in util.FEXT_FASTQ):
-        filetype = FileTypes.FASTQ
+        filetype = agha.FileType.FASTQ.get_name()
         command = f'fqtools validate {fp}'
+
     elif any(fp.name.endswith(fext) for fext in util.FEXT_VCF):
-        filetype = FileTypes.VCF
+        filetype = agha.FileType.VCF.get_name()
         command = f'bcftools query -l {fp}'
+
     else:
         LOGGER.critical(f'could not infer file type from extension for {fp}')
-        batch_job_result.status = 'FAIL'
-        write_results_s3(batch_job_result.__dict__, staging_s3_key)
-        sys.exit(1)
+        batch_job_result.status = batch.StatusBatchResult.FAIL.value
+        return batch_job_result
 
     # Validate filetype
-    batch_job_result.value = filetype.value
+    batch_job_result.value = filetype
     LOGGER.info(f'Command to execute: {command}')
     result = util.execute_command(command)
     if result.returncode != 0:
@@ -271,14 +274,14 @@ def run_filetype_validation(fp, staging_s3_key) -> BatchJobResult:
         LOGGER.info(f'file validation failed (invalid filetype or other failure): {stdstrm_msg}')
 
         # Update status
-        batch_job_result.status = 'FAIL'
+        batch_job_result.status = batch.StatusBatchResult.FAIL.value
 
         # Write log and exit
         return batch_job_result
 
     else:
         # Update status
-        batch_job_result.status = 'SUCCEED'
+        batch_job_result.status = batch.StatusBatchResult.SUCCEED.value
 
     # Log results
     inferred_str = f'inferred:  {batch_job_result.value}'
@@ -289,16 +292,16 @@ def run_filetype_validation(fp, staging_s3_key) -> BatchJobResult:
     return batch_job_result
 
 
-def run_indexing(fp, staging_s3_key, filetype) -> BatchJobResult:
+def run_indexing(fp, staging_s3_key, filetype) -> batch.BatchJobResult:
     # Create result class
-    batch_job_result = BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.INDEX.value)
+    batch_job_result = batch.BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.INDEX.value)
 
     # Run appropriate indexing command
     LOGGER.info('running indexing')
-    if filetype == FileTypes.BAM:
+    if filetype == agha.FileType.BAM.get_name():
         command = f'samtools index {fp}'
         index_fp = f'{fp}.bai'
-    elif filetype == FileTypes.VCF:
+    elif filetype == agha.FileType.VCF.get_name():
         command = f"tabix {fp} -p 'vcf'"
         index_fp = f'{fp}.tbi'
     else:
@@ -311,20 +314,24 @@ def run_indexing(fp, staging_s3_key, filetype) -> BatchJobResult:
         stdstrm_msg = f'\r\tstdout: {result.stdout}\r\tstderr: {result.stderr}'
         LOGGER.critical(f'failed to run indexing ({command}): {stdstrm_msg}')
 
-        batch_job_result.status = 'FAIL'
+        batch_job_result.status = batch.StatusBatchResult.FAIL.value
+        print(result)
+        sys.exit(1)
         return batch_job_result
 
     # Upload index and set results
     index_s3_key = upload_file_to_s3(index_fp)
 
-    batch_job_result.status = 'SUCCEED'
+    batch_job_result.status = batch.StatusBatchResult.SUCCEED.value
     batch_job_result.value = 'FILE'
 
     source_file = {
         'bucket_name': RESULTS_BUCKET,
         's3_key': index_s3_key,
+        'checksum': calculate_checksum_from_fp(index_fp)
     }
-    batch_job_result.source_file.append(source_file)
+
+    batch_job_result.source_file = [source_file]
 
     # Log results
     result_str = f'result:    {batch_job_result.status}'
@@ -335,6 +342,20 @@ def run_indexing(fp, staging_s3_key, filetype) -> BatchJobResult:
     LOGGER.info(f'file indexing results:\r\t{filetype_str}')
 
     return batch_job_result
+
+
+def calculate_checksum_from_fp(fp):
+    # Execute checksum
+    command = f"md5sum {fp} | cut -f1 -d' '"
+    LOGGER.info(f'Command to execute: {command}')
+    result = util.execute_command(command)
+
+    calculated_checksum: str = result.stdout.rstrip()
+
+    if result.returncode != 0:
+        raise ValueError(result.stderr)
+
+    return calculated_checksum
 
 
 def get_results_data_s3_key(s3_key):
