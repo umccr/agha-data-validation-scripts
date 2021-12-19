@@ -51,3 +51,5 @@ RUN \
 
 # Pull in execution script
 COPY assets/validate_file.py /opt/
+
+ENTRYPOINT ["/opt/validate_file.py"]
