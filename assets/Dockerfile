@@ -52,4 +52,5 @@ RUN \
 # Pull in execution script
 COPY assets/validate_file.py /opt/
 
+RUN ["chmod", "+x", "/opt/validate_file.py"]
 ENTRYPOINT ["/opt/validate_file.py"]
