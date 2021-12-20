@@ -30,6 +30,9 @@ BATCH_JOBID = util.get_environment_variable('AWS_BATCH_JOB_ID')
 # Get AWS clients
 CLIENT_S3 = util.get_client('s3')
 
+# Define list for ALL generated fp (To cleanup before exit)
+LOCAL_FP_LIST = []
+
 
 def get_arguments():
     parser = argparse.ArgumentParser()
@@ -76,6 +79,7 @@ def main():
         s3_key=staging_s3_key,
         filename=filename
     )
+    LOCAL_FP_LIST.append(fp_local.name)
 
     # Checksum tasks
     if batch.Tasks.CHECKSUM_VALIDATION in tasks:
@@ -114,8 +118,7 @@ def main():
                 compression_result = run_compression(fp_local=fp_local, staging_s3_key=staging_s3_key)
 
                 # Change fp_local to compressed file for further processing
-                fp_local  = str(fp_local) + '.gz'
-
+                fp_local = str(fp_local) + '.gz'
             else:
                 LOGGER.info(f'Data is already compressed. Compressed result refer to staging original data')
                 source_file = {
@@ -184,6 +187,10 @@ def run_compression(fp_local, staging_s3_key) -> batch.BatchJobResult:
     key_str = f'S3 key:    {compress_s3_key}'
     filetype_str = f'{result_str}\r\t{filename_str}\r\t{bucket_str}\r\t{key_str}'
     LOGGER.info(f'file indexing results:\r\t{filetype_str}')
+
+    # Update fp_list
+    LOCAL_FP_LIST.remove(fp_local.name)
+    LOCAL_FP_LIST.append(compress_fp)
 
     return batch_job_result
 
@@ -327,6 +334,8 @@ def run_indexing(fp, staging_s3_key, filetype) -> batch.BatchJobResult:
 
     result = util.execute_command(command)
 
+    LOCAL_FP_LIST.append(index_fp)
+
     if result.returncode != 0:
         stdstrm_msg = f'\r\tstdout: {result.stdout}\r\tstderr: {result.stderr}'
         LOGGER.critical(f'failed to run indexing ({command}): {stdstrm_msg}')
@@ -403,6 +412,10 @@ def write_results_s3(batch_result, staging_s3_key):
 
     LOGGER.info(f'writing results to s3://{RESULTS_BUCKET}/{s3_key}:\r{s3_object_body_log}')
     CLIENT_S3.put_object(Body=s3_object_body, Bucket=RESULTS_BUCKET, Key=s3_key)
+
+    # Delete local fp created during process
+    fp_cleanup()
+
     upload_log(staging_s3_key)
 
 
@@ -411,6 +424,13 @@ def upload_log(staging_s3_key):
     LOGGER.info(f'writing log file to s3://{RESULTS_BUCKET}/{s3_key}')
     LOG_FILE_HANDLER.flush()
     CLIENT_S3.upload_file(LOG_FILE_NAME, RESULTS_BUCKET, s3_key)
+
+
+def fp_cleanup():
+    LOGGER.info(f'Removing local file generated inside the container')
+    for fp in LOCAL_FP_LIST:
+        LOGGER.info(f'Removing: {fp}')
+        os.remove(fp)
 
 
 if __name__ == '__main__':
