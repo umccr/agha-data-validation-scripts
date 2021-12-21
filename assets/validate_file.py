@@ -334,15 +334,14 @@ def run_indexing(fp, staging_s3_key, filetype) -> batch.BatchJobResult:
 
     result = util.execute_command(command)
 
-    LOCAL_FP_LIST.append(index_fp)
-
     if result.returncode != 0:
         stdstrm_msg = f'\r\tstdout: {result.stdout}\r\tstderr: {result.stderr}'
         LOGGER.critical(f'failed to run indexing ({command}): {stdstrm_msg}')
 
         batch_job_result.status = batch.StatusBatchResult.FAIL.value
-        print(result)
         return batch_job_result
+
+    LOCAL_FP_LIST.append(index_fp)
 
     # Upload index and set results
     index_s3_key = upload_file_to_s3(index_fp)
