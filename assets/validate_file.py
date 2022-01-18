@@ -85,10 +85,11 @@ def main():
         filename=filename
     )
 
-    calculated_checksum = run_checksum(fp_local)
 
     # Checksum tasks
     if batch.Tasks.CHECKSUM_VALIDATION in tasks:
+
+        calculated_checksum = calculate_checksum_from_fp(fp_local)
         checksum_validation_result = validate_checksum(staging_s3_key, provided_checksum, calculated_checksum)
 
         batch_job_result_list.append(checksum_validation_result.__dict__)
@@ -131,7 +132,7 @@ def main():
                 source_file = {
                     'bucket_name': STAGING_BUCKET,
                     's3_key': staging_s3_key,
-                    'checksum': provided_checksum
+                    'checksum': calculate_checksum_from_fp(fp_local)
                 }
 
                 compression_result = batch.BatchJobResult(staging_s3_key=staging_s3_key,
@@ -240,27 +241,8 @@ def validate_checksum(staging_s3_key: str, calculated_checksum: str, provided_ch
         batch_job_result.status = batch.StatusBatchResult.FAIL.value
         return batch_job_result
 
-    # Checksum should be ok and match
-    calculated_str = f'calculated: {calculated_checksum}'
-    LOGGER.info(f'Calculated checksum result:\r\t{calculated_str}')
-
     batch_job_result.status = batch.StatusBatchResult.SUCCEED.value
     return batch_job_result
-
-
-def run_checksum(fp) -> str:
-    """
-    Expected result: A string of file checksusm
-    """
-    try:
-        LOGGER.info('running checksum')
-        calculated_checksum: str = calculate_checksum_from_fp(fp)
-        return calculated_checksum
-
-    except ValueError as e:
-        stdstrm_msg = f'\r\tstderr: {e}'
-        LOGGER.critical(f'failed to run checksum command: {stdstrm_msg}')
-        return stdstrm_msg
 
 
 def run_filetype_validation(fp, staging_s3_key) -> batch.BatchJobResult:
@@ -289,7 +271,7 @@ def run_filetype_validation(fp, staging_s3_key) -> batch.BatchJobResult:
 
     # Validate filetype
     batch_job_result.value = filetype
-    LOGGER.info(f'Command to execute: {command}')
+    LOGGER.info(f'Command to execute file validation: {command}')
     result = util.execute_command(command)
     if result.returncode != 0:
 
@@ -367,15 +349,19 @@ def run_indexing(fp, staging_s3_key, filetype) -> batch.BatchJobResult:
 
 def calculate_checksum_from_fp(fp):
     # Execute checksum
+    LOGGER.info('Running Checksum')
     command = f"md5sum {fp} | cut -f1 -d' '"
-    LOGGER.info(f'Command to execute: {command}')
+    LOGGER.info(f'Command to execute checksum: {command}')
     result = util.execute_command(command)
 
     calculated_checksum: str = result.stdout.rstrip()
-
     if result.returncode != 0:
-        raise ValueError(result.stderr)
 
+        stdstrm_msg = f'\r\tstderr: {result.stderr}'
+        LOGGER.critical(f'failed to run checksum command: {stdstrm_msg}')
+        return stdstrm_msg
+
+    LOGGER.info(f'Calculated checksum: {calculated_checksum}')
     return calculated_checksum
 
 
