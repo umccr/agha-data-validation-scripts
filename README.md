@@ -43,3 +43,21 @@ Copy the file
 ```bash
 svn checkout https://github.com/umccr/agha-data-validation-pipeline/branches/dev/lambdas/layers/util
 ```
+
+To Run the file manually run the docker run command. 
+The following command is an example how to run python script.
+```bash
+docker run \
+--env RESULTS_BUCKET=staging_bucket \
+--env STAGING_BUCKET=store_bucket \
+--env RESULTS_KEY_PREFIX=ACG/20210722_090101 \
+--env AWS_BATCH_JOB_ID=007 \
+--env AWS_ACCESS_KEY_ID=XXX \
+--env AWS_SECRET_ACCESS_KEY=XXX \
+--env AWS_SESSION_TOKEN=XXX
+${NAME} \
+--s3_key ACG/20210722_090101/short_reads_1.fastq \
+--tasks FILE_VALIDATION CREATE_INDEX CHECKSUM_VALIDATION CREATE_COMPRESS \
+--checksum 	b8f767ef5a9986bf602e51f4aacbc2b2
+
+```

@@ -5,19 +5,25 @@ import json
 import logging
 import os
 import pathlib
+import sys
+import uuid
+import shutil
 
 import util
 import util.batch as batch
 import util.s3 as s3
 import util.agha as agha
 
+TMP_DIRECTORY = f'tmp/{str(uuid.uuid4())}'
+
 # Logging
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 # Add log file handler so we can upload log messages to S3
-LOG_FILE_NAME = 'log.txt'
+LOG_FILE_NAME = f'log.txt'
 LOG_FILE_HANDLER = util.FileHandlerNewLine(LOG_FILE_NAME)
 LOGGER.addHandler(LOG_FILE_HANDLER)
+LOGGER.addHandler(logging.StreamHandler(sys.stdout))
 
 # Get environment variables
 RESULTS_BUCKET = util.get_environment_variable('RESULTS_BUCKET')
@@ -30,15 +36,12 @@ BATCH_JOBID = util.get_environment_variable('AWS_BATCH_JOB_ID')
 # Get AWS clients
 CLIENT_S3 = util.get_client('s3')
 
-# Define list for ALL generated fp (To cleanup before exit)
-LOCAL_FP_LIST = []
-
 
 def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--s3_key', required=True, type=str,
                         help='Staging s3_key is expected')
-    parser.add_argument('--checksum', required=True, type=str,
+    parser.add_argument('--checksum', required=False, type=str,
                         help='Checksum for the s3_key staging file')
     parser.add_argument('--tasks', required=True, choices=[m.value for m in batch.Tasks], nargs='+',
                         help='Tasks to perform')
@@ -56,6 +59,7 @@ def main():
 
     # Get command line arguments
     args = get_arguments()
+    os.mkdir(TMP_DIRECTORY)
 
     # Log Batch job id and set job datetime stamp
     LOGGER.info(f'starting job: {BATCH_JOBID}')
@@ -72,24 +76,27 @@ def main():
     batch_job_result_list = []
 
     # Stage file from S3 and then validate
-    filename = s3.get_s3_filename_from_s3_key(staging_s3_key)
-    LOGGER.info(f'Grabbing filename: {filename}')
+    filename = TMP_DIRECTORY + '/' + s3.get_s3_filename_from_s3_key(staging_s3_key)
+
+    LOGGER.info(f'Download temporary directory: {filename}')
     fp_local = stage_file(
         staging_bucket=STAGING_BUCKET,
         s3_key=staging_s3_key,
         filename=filename
     )
-    LOCAL_FP_LIST.append(fp_local.name)
+
+    calculated_checksum = run_checksum(fp_local)
 
     # Checksum tasks
     if batch.Tasks.CHECKSUM_VALIDATION in tasks:
-        checksum_result = run_checksum(fp_local, provided_checksum, staging_s3_key)
-        batch_job_result_list.append(checksum_result.__dict__)
+        checksum_validation_result = validate_checksum(staging_s3_key, provided_checksum, calculated_checksum)
+
+        batch_job_result_list.append(checksum_validation_result.__dict__)
         LOGGER.info('Appending results:')
-        LOGGER.info(json.dumps(checksum_result.__dict__))
+        LOGGER.info(json.dumps(checksum_validation_result.__dict__, indent=4, cls=util.JsonSerialEncoder))
 
         # Not proceeding to anything else. Original data might have something wrong
-        if checksum_result.status == batch.StatusBatchResult.FAIL.value:
+        if checksum_validation_result.status == batch.StatusBatchResult.FAIL.value:
             LOGGER.info('Checksum test FAIL. Aborting...')
             write_results_s3(batch_job_result_list, staging_s3_key)
             return
@@ -99,7 +106,7 @@ def main():
         file_validation_result = run_filetype_validation(fp_local, staging_s3_key)
         batch_job_result_list.append(file_validation_result.__dict__)
         LOGGER.info('Appending results:')
-        LOGGER.info(json.dumps(file_validation_result.__dict__))
+        LOGGER.info(json.dumps(file_validation_result.__dict__, indent=4, cls=util.JsonSerialEncoder))
 
         # Not proceeding to anything else. Original data might have something wrong
         if file_validation_result.status == batch.StatusBatchResult.FAIL.value:
@@ -134,7 +141,7 @@ def main():
 
             batch_job_result_list.append(compression_result.__dict__)
             LOGGER.info('Appending results:')
-            LOGGER.info(json.dumps(compression_result.__dict__))
+            LOGGER.info(json.dumps(compression_result.__dict__, indent=4, cls=util.JsonSerialEncoder))
 
         # Simplify index requirement check
         if batch.Tasks.INDEX in tasks and agha.FileType.is_indexable(filetype):
@@ -144,7 +151,7 @@ def main():
             batch_job_result_list.append(indexing_result.__dict__)
 
             LOGGER.info('Appending results:')
-            LOGGER.info(json.dumps(indexing_result.__dict__))
+            LOGGER.info(json.dumps(indexing_result.__dict__, indent=4, cls=util.JsonSerialEncoder))
 
     # Write completed result to log and S3
     write_results_s3(batch_job_result_list, staging_s3_key)
@@ -188,10 +195,6 @@ def run_compression(fp_local, staging_s3_key) -> batch.BatchJobResult:
     filetype_str = f'{result_str}\r\t{filename_str}\r\t{bucket_str}\r\t{key_str}'
     LOGGER.info(f'file indexing results:\r\t{filetype_str}')
 
-    # Update fp_list
-    LOCAL_FP_LIST.remove(fp_local.name)
-    LOCAL_FP_LIST.append(compress_fp)
-
     return batch_job_result
 
 
@@ -225,30 +228,11 @@ def stage_file(staging_bucket, s3_key, filename):
     return output_fp
 
 
-def run_checksum(fp, provided_checksum, staging_s3_key) -> batch.BatchJobResult:
-    """
-    Expected result: A record class of BatchJobResult
-    """
-
-    LOGGER.info('running checksum')
-
-    # Create result class
+def validate_checksum(staging_s3_key: str, calculated_checksum: str, provided_checksum: str) -> batch.BatchJobResult:
     batch_job_result = batch.BatchJobResult(staging_s3_key=staging_s3_key,
-                                            task_type=batch.Tasks.CHECKSUM_VALIDATION.value)
+                                            task_type=batch.Tasks.CHECKSUM_VALIDATION.value,
+                                            value=calculated_checksum)
 
-    try:
-        calculated_checksum: str = calculate_checksum_from_fp(fp)
-
-        batch_job_result.value = calculated_checksum
-
-    except ValueError as e:
-        stdstrm_msg = f'\r\tstderr: {e}'
-        LOGGER.critical(f'failed to run checksum command: {stdstrm_msg}')
-
-        batch_job_result.status = batch.StatusBatchResult.FAIL.value
-        return batch_job_result
-
-    # Check for mismatch checksum
     if provided_checksum != calculated_checksum:
         LOGGER.critical(f'Provided checksum and calculated checksum does not match')
         LOGGER.critical(f'Provided checksum: {provided_checksum} and calculated checksum: {calculated_checksum}')
@@ -262,6 +246,21 @@ def run_checksum(fp, provided_checksum, staging_s3_key) -> batch.BatchJobResult:
 
     batch_job_result.status = batch.StatusBatchResult.SUCCEED.value
     return batch_job_result
+
+
+def run_checksum(fp) -> str:
+    """
+    Expected result: A string of file checksusm
+    """
+    try:
+        LOGGER.info('running checksum')
+        calculated_checksum: str = calculate_checksum_from_fp(fp)
+        return calculated_checksum
+
+    except ValueError as e:
+        stdstrm_msg = f'\r\tstderr: {e}'
+        LOGGER.critical(f'failed to run checksum command: {stdstrm_msg}')
+        return stdstrm_msg
 
 
 def run_filetype_validation(fp, staging_s3_key) -> batch.BatchJobResult:
@@ -341,8 +340,6 @@ def run_indexing(fp, staging_s3_key, filetype) -> batch.BatchJobResult:
         batch_job_result.status = batch.StatusBatchResult.FAIL.value
         return batch_job_result
 
-    LOCAL_FP_LIST.append(index_fp)
-
     # Upload index and set results
     index_s3_key = upload_file_to_s3(index_fp)
 
@@ -395,7 +392,8 @@ def get_log_s3_key(s3_key):
 
 
 def upload_file_to_s3(fp):
-    s3_key = os.path.join(RESULTS_KEY_PREFIX, fp)
+    filename = os.path.basename(fp)
+    s3_key = os.path.join(RESULTS_KEY_PREFIX, filename)
     LOGGER.info(f'writing {fp} to s3://{RESULTS_BUCKET}/{s3_key}')
     CLIENT_S3.upload_file(fp, RESULTS_BUCKET, s3_key)
     return s3_key
@@ -403,7 +401,7 @@ def upload_file_to_s3(fp):
 
 def write_results_s3(batch_result, staging_s3_key):
     # Create results json
-    s3_object_body = f'{json.dumps(batch_result, indent=4)}\n'
+    s3_object_body = f'{json.dumps(batch_result, indent=4, cls=util.JsonSerialEncoder)}\n'
 
     # Upload results and log to S3
     s3_key = get_results_data_s3_key(staging_s3_key)
@@ -412,10 +410,10 @@ def write_results_s3(batch_result, staging_s3_key):
     LOGGER.info(f'writing results to s3://{RESULTS_BUCKET}/{s3_key}:\r{s3_object_body_log}')
     CLIENT_S3.put_object(Body=s3_object_body, Bucket=RESULTS_BUCKET, Key=s3_key)
 
+    upload_log(staging_s3_key)
+
     # Delete local fp created during process
     fp_cleanup()
-
-    upload_log(staging_s3_key)
 
 
 def upload_log(staging_s3_key):
@@ -427,9 +425,11 @@ def upload_log(staging_s3_key):
 
 def fp_cleanup():
     LOGGER.info(f'Removing local file generated inside the container')
-    for fp in LOCAL_FP_LIST:
-        LOGGER.info(f'Removing: {fp}')
-        os.remove(fp)
+    # checking whether folder exists or not
+    if os.path.exists(TMP_DIRECTORY):
+        LOGGER.info(f'Removing directory: {TMP_DIRECTORY}')
+        # checking whether the folder is empty or not
+        shutil.rmtree(TMP_DIRECTORY)
 
 
 if __name__ == '__main__':
