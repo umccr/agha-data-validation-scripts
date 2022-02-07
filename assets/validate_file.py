@@ -43,7 +43,7 @@ def get_arguments():
                         help='Staging s3_key is expected')
     parser.add_argument('--checksum', required=False, type=str,
                         help='Checksum for the s3_key staging file')
-    parser.add_argument('--tasks', required=True, choices=[m.value for m in batch.Tasks], nargs='+',
+    parser.add_argument('--tasks', required=True, choices=[m.value for m in batch.Tasks.tasks_to_list()], nargs='+',
                         help='Tasks to perform')
     return parser.parse_args()
 
@@ -54,7 +54,7 @@ def main():
     1. Check if checksum calculated and provided is match
     2. Check if filetype is valid and acceptable
     3. Compress file if able. Available for compress: VCF, FASTQ
-    4. Generate index file when available. Available for indexing: BAM, VCF (Will use compressed at step 3 if avail)
+    4. Generate index file when available. Available for indexing: BAM, CRAM, VCF (Will use compressed at step 3 if avail)
     """
 
     # Get command line arguments
@@ -84,7 +84,6 @@ def main():
         s3_key=staging_s3_key,
         filename=filename
     )
-
 
     # Checksum tasks
     if batch.Tasks.CHECKSUM_VALIDATION in tasks:
@@ -252,16 +251,14 @@ def run_filetype_validation(fp, staging_s3_key) -> batch.BatchJobResult:
     batch_job_result = batch.BatchJobResult(staging_s3_key=staging_s3_key, task_type=batch.Tasks.FILE_VALIDATION.value)
 
     # Get file type
-    if (agha.FileType.from_name(fp.name) == agha.FileType.BAM):
-        filetype = agha.FileType.BAM.get_name()
+    filetype = agha.FileType.from_name(fp.name)
+    if filetype == agha.FileType.BAM or filetype == agha.FileType.CRAM:
         command = f'samtools quickcheck -q {fp}'
 
-    elif agha.FileType.from_name(fp.name) == agha.FileType.FASTQ:
-        filetype = agha.FileType.FASTQ.get_name()
+    elif filetype == agha.FileType.FASTQ:
         command = f'fqtools validate {fp}'
 
-    elif agha.FileType.from_name(fp.name) == agha.FileType.VCF:
-        filetype = agha.FileType.VCF.get_name()
+    elif filetype == agha.FileType.VCF:
         command = f'bcftools query -l {fp}'
 
     else:
@@ -270,7 +267,7 @@ def run_filetype_validation(fp, staging_s3_key) -> batch.BatchJobResult:
         return batch_job_result
 
     # Validate filetype
-    batch_job_result.value = filetype
+    batch_job_result.value = filetype.get_name()
     LOGGER.info(f'Command to execute file validation: {command}')
     result = util.execute_command(command)
     if result.returncode != 0:
@@ -306,6 +303,9 @@ def run_indexing(fp, staging_s3_key, filetype) -> batch.BatchJobResult:
     if filetype == agha.FileType.BAM.get_name():
         command = f'samtools index {fp}'
         index_fp = f'{fp}.bai'
+    elif filetype == agha.FileType.CRAM.get_name():
+        command = f'samtools index {fp}'
+        index_fp = f'{fp}.crai'
     elif filetype == agha.FileType.VCF.get_name():
         command = f"tabix {fp} -p 'vcf'"
         index_fp = f'{fp}.tbi'
