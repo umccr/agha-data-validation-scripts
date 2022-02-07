@@ -43,7 +43,7 @@ def get_arguments():
                         help='Staging s3_key is expected')
     parser.add_argument('--checksum', required=False, type=str,
                         help='Checksum for the s3_key staging file')
-    parser.add_argument('--tasks', required=True, choices=[m.value for m in batch.Tasks.tasks_to_list()], nargs='+',
+    parser.add_argument('--tasks', required=True, choices=batch.Tasks.tasks_to_list(), nargs='+',
                         help='Tasks to perform')
     return parser.parse_args()
 
