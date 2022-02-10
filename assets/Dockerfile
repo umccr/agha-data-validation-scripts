@@ -1,6 +1,6 @@
 
 # Build on top of Ubuntu LTS (focal)
-FROM public.ecr.aws/ubuntu/ubuntu:20.04
+FROM --platform=linux/x86-64 public.ecr.aws/ubuntu/ubuntu:20.04
 
 # Set Conda environment name
 ARG ENV_NAME=agha
@@ -44,7 +44,7 @@ ENV CONDA_PREFIX="/opt/mambaforge/envs/${ENV_NAME}"
 
 # Install 'util' Python package
 # NOTE: This use dev branch instead of main branch
-RUN svn checkout https://github.com/umccr/agha-data-validation-pipeline/branches/dev/lambdas/layers/util /opt/util/
+RUN svn checkout https://github.com/umccr/agha-data-validation-pipeline/branches/main/lambdas/layers/util /opt/util/
 RUN \
     pip install /opt/util/ && \
     rm -r /opt/util/

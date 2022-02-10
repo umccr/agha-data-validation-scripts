@@ -1,7 +1,7 @@
 # agha-data-validation-scripts
 
 
-This repository is a supplementary of [ummcr/agha-data-validation-pipeline](https://github.com/umccr/agha-data-validation-pipeline) (Currently using dev branch).
+This repository is a supplementary of [ummcr/agha-data-validation-pipeline](https://github.com/umccr/agha-data-validation-pipeline).
 Wrapping script into images and pushed to ECR.
 
 The repository has a codebuild to build images from python scripts located in `/assets` and will detect changes to the 
@@ -12,7 +12,8 @@ ___
 
 ### Create virtual environment
 ```bash
-python3 -m venv .venv/
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
