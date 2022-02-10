@@ -85,21 +85,25 @@ def main():
         filename=filename
     )
 
-    # Checksum tasks
-    if batch.Tasks.CHECKSUM_VALIDATION in tasks:
+    # Every single file must have a checksum as the output
+    calculated_checksum = calculate_checksum_from_fp(fp_local)
 
-        calculated_checksum = calculate_checksum_from_fp(fp_local)
-        checksum_validation_result = validate_checksum(staging_s3_key, provided_checksum, calculated_checksum)
+    # If checksum validation task is not selected, checksum will still be generated as a success output
+    # To do so, assign provided checksum to with the same generated output.
+    if batch.Tasks.CHECKSUM_VALIDATION not in tasks:
+        provided_checksum = calculated_checksum
 
-        batch_job_result_list.append(checksum_validation_result.__dict__)
-        LOGGER.info('Appending results:')
-        LOGGER.info(json.dumps(checksum_validation_result.__dict__, indent=4, cls=util.JsonSerialEncoder))
+    # Checking if provided checksum is correct
+    checksum_validation_result = validate_checksum(staging_s3_key, provided_checksum, calculated_checksum)
+    batch_job_result_list.append(checksum_validation_result.__dict__)
+    LOGGER.info('Appending results:')
+    LOGGER.info(json.dumps(checksum_validation_result.__dict__, indent=4, cls=util.JsonSerialEncoder))
 
-        # Not proceeding to anything else. Original data might have something wrong
-        if checksum_validation_result.status == batch.StatusBatchResult.FAIL.value:
-            LOGGER.info('Checksum test FAIL. Aborting...')
-            write_results_s3(batch_job_result_list, staging_s3_key)
-            return
+    # Terminate check if checksum is failinng
+    if checksum_validation_result.status == batch.StatusBatchResult.FAIL.value:
+        LOGGER.info('Checksum test FAIL. Aborting...')
+        write_results_s3(batch_job_result_list, staging_s3_key)
+        return
 
     # File Validation task
     if batch.Tasks.FILE_VALIDATION in tasks:

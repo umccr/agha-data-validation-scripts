@@ -4,11 +4,11 @@ from aws_cdk import (
     aws_codebuild as codebuild
 )
 
+
 class CodebuildStack(core.Stack):
 
     def __init__(self, scope: core.Construct, id: str, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
-
 
         ################################################################################
         # ECR
@@ -57,11 +57,11 @@ class CodebuildStack(core.Stack):
                 ),
 
             },
-            build_spec = codebuild.BuildSpec.from_object({
+            build_spec=codebuild.BuildSpec.from_object({
                 "version": "0.2",
                 "phases": {
-                    "pre_build":{
-                        "commands":[
+                    "pre_build": {
+                        "commands": [
                             "aws ecr get-login-password --region ap-southeast-2 | "
                             "docker login --username AWS --password-stdin ${AWS_PROVIDER_URI}"
                         ]
@@ -78,4 +78,3 @@ class CodebuildStack(core.Stack):
         validate_file_ecr_repo.grant_pull_push(codebuild_build_image)
 
         # TODO: Might put this as a for loop when multiple script need to be published from assets directory to ECR
-
