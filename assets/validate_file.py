@@ -99,7 +99,7 @@ def main():
     LOGGER.info('Appending results:')
     LOGGER.info(json.dumps(checksum_validation_result.__dict__, indent=4, cls=util.JsonSerialEncoder))
 
-    # Terminate check if checksum is failinng
+    # Terminate check if checksum is failing
     if checksum_validation_result.status == batch.StatusBatchResult.FAIL.value:
         LOGGER.info('Checksum test FAIL. Aborting...')
         write_results_s3(batch_job_result_list, staging_s3_key)
