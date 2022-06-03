@@ -17,7 +17,15 @@ class CodebuildStack(core.Stack):
             "AGHAValidationEcrRepo",
             image_tag_mutability=ecr.TagMutability.MUTABLE,
             removal_policy=core.RemovalPolicy.DESTROY,
-            repository_name="agha-gdr-validate-file"
+            repository_name="agha-gdr-validate-file",
+            lifecycle_rules=[
+                ecr.LifecycleRule(
+                    description="Remove untagged images if exist more than 1.",
+                    rule_priority=1,
+                    max_image_count=1,
+                    tag_status=ecr.TagStatus.UNTAGGED
+                )
+            ]
         )
 
         ################################################################################
