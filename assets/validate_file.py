@@ -94,7 +94,9 @@ def main():
         provided_checksum = calculated_checksum
 
     # Checking if provided checksum is correct
-    checksum_validation_result = validate_checksum(staging_s3_key, provided_checksum, calculated_checksum)
+    checksum_validation_result = validate_checksum(staging_s3_key=staging_s3_key,
+                                                   calculated_checksum=calculated_checksum,
+                                                   provided_checksum=provided_checksum)
     batch_job_result_list.append(checksum_validation_result.__dict__)
     LOGGER.info('Appending results:')
     LOGGER.info(json.dumps(checksum_validation_result.__dict__, indent=4, cls=util.JsonSerialEncoder))
@@ -360,7 +362,6 @@ def calculate_checksum_from_fp(fp):
 
     calculated_checksum: str = result.stdout.rstrip()
     if result.returncode != 0:
-
         stdstrm_msg = f'\r\tstderr: {result.stderr}'
         LOGGER.critical(f'failed to run checksum command: {stdstrm_msg}')
         return stdstrm_msg
